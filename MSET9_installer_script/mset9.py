@@ -45,7 +45,7 @@ def verify_device():
 	# for the rest
 	else:
 		systemroot = pathlib.Path(sys.executable).anchor # Never hardcode C:. My Windows drive letter is E:, my SD card or USB drive is often C:.
-		if os.stat(scriptroot).st_dev != os.stat(systemroot).st_dev:
+		if os.stat(scriptroot).st_dev == os.stat(systemroot).st_dev:
 			throw_error()
 
 def dig_for_root():
