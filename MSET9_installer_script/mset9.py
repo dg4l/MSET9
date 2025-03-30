@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 import abc, sys, os, platform, shutil, time, pathlib, binascii
 
-VERSION = "v2.0"
+VERSION = "v2.1"
 
 def prgood(content):
 	# print(f"[\033[0;32m✓\033[0m] {content}")
