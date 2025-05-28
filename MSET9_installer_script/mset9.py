@@ -78,105 +78,12 @@ def dig_for_root():
 		scriptroot = root
 		thisfile = os.path.join(scriptroot, "mset9.py")
 
-<<<<<<< Updated upstream
-if osver == "Darwin":
-	# ======== macOS / iOS? ========
-
-	tmpprefix = "mset9-macos-run-"
-
-	def is_ios():
-		machine = os.uname().machine
-		return any(machine.startswith(e) for e in ["iPhone", "iPad"])
-
-	def tmp_cleanup():
-		global tmpprefix, systmp
-		prinfo("Removing temporary folders...")
-		import tempfile, shutil
-		if systmp is None:
-			systmp = tempfile.gettempdir()
-		for dirname in os.listdir(systmp):
-			if dirname.startswith(tmpprefix):
-				shutil.rmtree(f"{systmp}/{dirname}")
-		prinfo("Temporary folders removed!")
-
-	def run_diskutil_and_wait(command, dev):
-		import subprocess
-		if type(command) != list:
-			command = [command]
-		return subprocess.run(["diskutil", *command, dev], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
-
-	if len(sys.argv) < 2:
-		verify_device()
-		if not scriptroot.startswith("/Volumes/"): # Can probably remove this now given the above function but meh!
-			prbad("Error 01: Couldn't find Nintendo 3DS folder! Ensure that you are running this script from the root of the SD card.")
-			# should we add some macos specific message?
-			exitOnEnter()
-
-		dig_for_root()
-		prinfo("Resolving device...")
-		device = None
-		devid = os.stat(scriptroot).st_dev
-		for devname in os.listdir("/dev"):
-			if not devname.startswith("disk"):
-				continue
-			devpath = f"/dev/{devname}"
-			if os.stat(devpath).st_rdev == devid:
-				device = devpath
-				break
-		if device is None:
-			#prbad("Error :")
-			prbad("Can't find matching device, this shouldn't happen...")
-			exitOnEnter()
-
-		prinfo("Finding previous temporary folder...")
-		import shutil, tempfile, time
-		systmp = tempfile.gettempdir()
-		tmpdir = None
-		for dirname in os.listdir(systmp):
-			if dirname.startswith(tmpprefix):
-				dirpath = f"{systmp}/{dirname}"
-				script = f"{dirpath}/mset9.py"
-				tmp_st = os.stat(script)
-				this_st = os.stat(thisfile)
-				# hope file size is enough fix... checksum is a bit heavy i assume
-				if os.path.exists(script) and tmp_st.st_mtime > this_st.st_mtime and tmp_st.st_size == this_st.st_size:
-					tmpdir = dirpath
-					break
-				else:
-					shutil.rmtree(dirpath)
-		if tmpdir is None:
-			prinfo("Creating temporary folder...")
-			tmpdir = tempfile.mkdtemp(prefix=tmpprefix)
-			shutil.copyfile(thisfile, f"{tmpdir}/mset9.py")
-
-		prinfo("Trying to unmount SD card...")
-		ret = run_diskutil_and_wait(["umount", "force"], device)
-
-		if ret == 1:
-			prbad("Error 16: Unable to unmount SD card.")
-			prinfo("Please ensure there's no other app using your SD card.")
-			#tmp_cleanup()
-			exitOnEnter()
-
-		os.execlp(sys.executable, sys.executable, f"{tmpdir}/mset9.py", device)
-		prbad("WTF???")
-
-	device = sys.argv[1]
-	if len(sys.argv) == 3:
-		systmp = sys.argv[2]
-	if not os.path.exists(device):
-		prbad("Error 13: Device doesn't exist.")
-		prinfo("Ensure your SD card is inserted properly.")
-		prinfo("Also, don't eject SD card itself in disk utility, unmount the partition only.")
-		#tmp_cleanup()
-=======
 def try_chdir():
 	global scriptroot
 	try:
 		os.chdir(scriptroot)
 	except Exception:
 		prbad("Error 08: Couldn't reapply working directory, is SD card reinserted?")
->>>>>>> Stashed changes
 		exitOnEnter()
 
 def is_writable():
