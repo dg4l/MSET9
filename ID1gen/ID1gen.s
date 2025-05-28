@@ -7,14 +7,15 @@
 
 .global _start
 start:
-				blx .+4
-				@adr r12, thumb_section+1			@this is legal? lol, whatever we save 4 bytes
-				@bx r12
+				@blx .+4					@this is legal? lol, whatever we save 4 bytes
+				adr r12, thumb_section+1
+				bx r12
 				
 .thumb
 thumb_section:
 				ldr r1, [sp,#0x44]                    	@colon_slash that cannot be displayed in PC folder but exists in stack at fixed offset
-				ldr r0, =0x080A9000
+				@ldr r0, =0x080A9000
+				ldr r0, colon_slash
 				mov sp, r0
 				@mov r0, sp		      		@this  d9000
 				str r1, [r5,#(colon_slash-start+0x1c)]  @lets overwrite 00440044 below with :/ as a workaround
