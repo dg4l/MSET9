@@ -1,7 +1,7 @@
 #!/usr/bin/python3
-import abc, sys, os, platform, time, pathlib, binascii
+import abc, sys, os, platform, shutil, time, pathlib, binascii
 
-VERSION = "v2.0"
+VERSION = "v2.1"
 
 def prgood(content):
 	# print(f"[\033[0;32m✓\033[0m] {content}")
@@ -14,74 +14,41 @@ def prbad(content):
 def prinfo(content):
 	print(f"[--] {content}")
 
-def cleanup(remount=False):
-	pass
-
-def exitOnEnter(errCode = 0, remount=False):
-	cleanup(remount)
+def exitOnEnter(errCode = 0):
 	input("[--] Press Enter to exit...")
 	exit(errCode)
-
-# wrapper for fs operations. can use pyfilesystem2 directly,
-# but try to avoid extra dependency on non-darwin system
-class FSWrapper(metaclass=abc.ABCMeta):
-	@abc.abstractmethod
-	def exists(self, path):
-		pass
-	@abc.abstractmethod
-	def mkdir(self, path):
-		pass
-	@abc.abstractmethod
-	def open(self, path, mode='r'):
-		pass
-	@abc.abstractmethod
-	def getsize(self, path):
-		pass
-	@abc.abstractmethod
-	def remove(self, path):
-		pass
-	@abc.abstractmethod
-	def rename(self, src, dst):
-		pass
-	@abc.abstractmethod
-	def rmtree(self, path):
-		pass
-	@abc.abstractmethod
-	def copytree(self, src, dst):
-		pass
-	@abc.abstractmethod
-	def is_writable(self):
-		pass
-	@abc.abstractmethod
-	def ensurespace(self, size):
-		pass
-	@abc.abstractmethod
-	def close(self):
-		pass
-	@abc.abstractmethod
-	def reload(self):
-		pass
-	@abc.abstractmethod
-	def print_root(self):
-		pass
-
-def remove_extra():
-	pass
 
 osver = platform.system()
 thisfile = os.path.abspath(__file__)
 scriptroot = os.path.dirname(thisfile)
 systmp = None
 
+def need_hangul_fix():
+	if osver == "Darwin":
+		return True
+	if osver == "Linux":
+		uname = os.uname()
+		# iSH
+		if uname.machine == "i686" and uname.release.endswith("-ish"):
+			return True
+	return False
+
 def verify_device():
-	systemroot = pathlib.Path(sys.executable).anchor # Never hardcode C:. My Windows drive letter is E:, my SD card or USB drive is often C:.
-	if os.stat(scriptroot).st_dev == os.stat(systemroot).st_dev:
+	def throw_error():
 		prbad("Error 01: Script is not running on your SD card!")
 		prinfo(f"Current location: {scriptroot}")
 		exitOnEnter()
+	# check for aShell on iOS/iPadOS
+	if osver == "Darwin" and os.uname().machine.startswith(("iPod", "iPhone", "iPad")):  # safe to ignore AppleTV or Apple Watch ?
+		if "com.apple.filesystems.userfsd" not in os.getcwd():
+			throw_error()
+	# for the rest
+	else:
+		systemroot = pathlib.Path(sys.executable).anchor # Never hardcode C:. My Windows drive letter is E:, my SD card or USB drive is often C:.
+		if os.stat(scriptroot).st_dev == os.stat(systemroot).st_dev:
+			throw_error()
 
 def dig_for_root():
-	import shutil
 	global thisfile, scriptroot
 
 	if not os.path.ismount(scriptroot):
@@ -111,476 +78,64 @@ def dig_for_root():
 		scriptroot = root
 		thisfile = os.path.join(scriptroot, "mset9.py")
 
-if osver == "Darwin":
-	# ======== macOS / iOS? ========
-
-	tmpprefix = "mset9-macos-run-"
-
-	def is_ios():
-		machine = os.uname().machine
-		return any(machine.startswith(e) for e in ["iPhone", "iPad"])
-
-	def tmp_cleanup():
-		global tmpprefix, systmp
-		prinfo("Removing temporary folders...")
-		import tempfile, shutil
-		if systmp is None:
-			systmp = tempfile.gettempdir()
-		for dirname in os.listdir(systmp):
-			if dirname.startswith(tmpprefix):
-				shutil.rmtree(f"{systmp}/{dirname}")
-		prinfo("Temporary folders removed!")
-
-	def run_diskutil_and_wait(command, dev):
-		import subprocess
-		if type(command) != list:
-			command = [command]
-		return subprocess.run(["diskutil", *command, dev], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
-
-	if len(sys.argv) < 2:
-		verify_device()
-		if not scriptroot.startswith("/Volumes/"): # Can probably remove this now given the above function but meh!
-			prbad("Error 01: Couldn't find Nintendo 3DS folder! Ensure that you are running this script from the root of the SD card.")
-			# should we add some macos specific message?
-			exitOnEnter()
-
-		dig_for_root()
-		prinfo("Resolving device...")
-		device = None
-		devid = os.stat(scriptroot).st_dev
-		for devname in os.listdir("/dev"):
-			if not devname.startswith("disk"):
-				continue
-			devpath = f"/dev/{devname}"
-			if os.stat(devpath).st_rdev == devid:
-				device = devpath
-				break
-		if device is None:
-			#prbad("Error :")
-			prbad("Can't find matching device, this shouldn't happen...")
-			exitOnEnter()
-
-		prinfo("Finding previous temporary folder...")
-		import shutil, tempfile, time
-		systmp = tempfile.gettempdir()
-		tmpdir = None
-		for dirname in os.listdir(systmp):
-			if dirname.startswith(tmpprefix):
-				dirpath = f"{systmp}/{dirname}"
-				script = f"{dirpath}/mset9.py"
-				tmp_st = os.stat(script)
-				this_st = os.stat(thisfile)
-				# hope file size is enough fix... checksum is a bit heavy i assume
-				if os.path.exists(script) and tmp_st.st_mtime > this_st.st_mtime and tmp_st.st_size == this_st.st_size:
-					tmpdir = dirpath
-					break
-				else:
-					shutil.rmtree(dirpath)
-		if tmpdir is None:
-			prinfo("Creating temporary folder...")
-			tmpdir = tempfile.mkdtemp(prefix=tmpprefix)
-			shutil.copyfile(thisfile, f"{tmpdir}/mset9.py")
-
-		prinfo("Trying to unmount SD card...")
-		ret = run_diskutil_and_wait(["umount", "force"], device)
-
-		if ret == 1:
-			prbad("Error 16: Unable to unmount SD card.")
-			prinfo("Please ensure there's no other app using your SD card.")
-			#tmp_cleanup()
-			exitOnEnter()
-
-		os.execlp(sys.executable, sys.executable, f"{tmpdir}/mset9.py", device)
-		prbad("WTF???")
-
-	device = sys.argv[1]
-	if len(sys.argv) == 3:
-		systmp = sys.argv[2]
-	if not os.path.exists(device):
-		prbad("Error 13: Device doesn't exist.")
-		prinfo("Ensure your SD card is inserted properly.")
-		prinfo("Also, don't eject SD card itself in disk utility, unmount the partition only.")
-		#tmp_cleanup()
+def try_chdir():
+	global scriptroot
+	try:
+		os.chdir(scriptroot)
+	except Exception:
+		prbad("Error 08: Couldn't reapply working directory, is SD card reinserted?")
 		exitOnEnter()
 
-	# auto venv
-	venv_path = os.path.dirname(thisfile)
-	venv_bin = f"{venv_path}/bin"
-	venv_py = f"{venv_bin}/python3"
+def is_writable():
+	global scriptroot
+	writable = os.access(scriptroot, os.W_OK)
+	try: # Bodge for windows
+		with open("test.txt", "w") as f:
+			f.write("test")
+			f.close()
+		os.remove("test.txt")
+	except:
+		writable = False
+	return writable
 
-	def check_ios_py_entitlement(path):
-		import subprocess
-		import xml.etree.ElementTree as ET
-		try:
-			result = subprocess.run(["ldid", "-e", path], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-			if result.returncode != 0:
-				prbad("Error #: Fail to check venv python ios entitlement")
-				prinfo(f"ldid error (ret={result.returncode})")
-				tmp_cleanup()
-				exitOnEnter()
-				#return False
-			tree = ET.fromstring(result.stdout)
-			result = 0  # 0: not found    1: wait key
-			for child in tree.find("./dict"):
-				if child.tag == "key" and child.text == "com.apple.private.security.disk-device-access":
-					result = 1
-				elif result == 0:
-					if child.tag == "true":
-						result = True
-						break
-					elif child.tag == "false":
-						result = False
-						break
-					else:
-						result = 0  # not valid, reset
+def abs(path):
+	global scriptroot
+	return os.path.join(scriptroot, path)
 
-			if result == 0 or result == 1:
-				return False
-
-			return result
-
-		except FileNotFoundError:
-			return None
-
-	def fix_ios_py_entitlement(path):
-		import subprocess
-
-		basepath = os.path.dirname(path)
-
-		if os.path.islink(path):
-			import shutil
-			realpy = os.path.join(basepath, os.readlink(path))
-			os.remove(path)
-			shutil.copyfile(realpy, path)
-			shutil.copymode(realpy, path)
-
-		entaddxml = os.path.join(basepath, "entadd.xml")
-		with open(entaddxml, "w") as f:
-			f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
-			f.write('<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n')
-			f.write('<plist version="1.0">\n')
-			f.write('<dict>\n')
-			f.write('\t<key>com.apple.private.security.disk-device-access</key>\n')
-			f.write('\t<true/>\n')
-			f.write('</dict>\n')
-			f.write('</plist>\n')
-
-		try:
-			args = ["ldid", "-M", f"-S{entaddxml}", path]
-			result = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-			if result.returncode != 0:
-				prbad("Error #: Fail to modify venv python ios entitlement")
-				prinfo(f"ldid ret={result.returncode}")
-				prinfo("Message:")
-				prinfo(result.stderr)
-
-		except FileNotFoundError:
-			prbad("Error #: Fail to modify venv python ios entitlement")
-			prinfo("wtf? ldid disappeared?")
-			tmp_cleanup()
-			exitOnEnter()
-
-	def activate_venv():
-		global venv_path, venv_bin, venv_py, device, systmp
-		import site
-
-		# assuming it's fine if ldid doesn't exist
-		if is_ios() and check_ios_py_entitlement(venv_py) == False:
-			prinfo("fixing entitlement...")
-			fix_ios_py_entitlement(venv_py)
-
-		os.environ["PATH"] = os.pathsep.join([venv_bin, *os.environ.get("PATH", "").split(os.pathsep)])
-		os.environ["VIRTUAL_ENV"] = venv_path
-		os.environ["VIRTUAL_ENV_PROMPT"] = "(mset9)"
-
-		#if systmp is None:
-		#	os.execlp(py_exec, venv_py, __file__, device)
-		#else:
-		#	os.execlp(py_exec, venv_py, __file__, device, systmp)
-
-		prev_length = len(sys.path)
-		ver = sys.version_info
-		ver_path = f"python{ver.major}.{ver.minor}"
-		path = os.path.realpath(os.path.join(venv_path, "lib", ver_path, "site-packages"))
-		site.addsitedir(path)
-		sys.path[:] = sys.path[prev_length:] + sys.path[0:prev_length]
-		sys.real_prefix = sys.prefix
-		sys.prefix = venv_path
-
-	def setup_venv():
-		import venv, subprocess
-		if "VIRTUAL_ENV" not in os.environ:
-			if os.path.exists(venv_bin):
-				import shutil
-				shutil.rmtree(venv_bin)
-			venv.create(venv_path, with_pip=True)
-		subprocess.run([venv_py, "-mensurepip"], cwd=venv_path)
-		subprocess.run([venv_py, "-mpip", "install", "pyfatfs"], cwd=venv_path)
-		activate_venv()
-
-	if "VIRTUAL_ENV" not in os.environ:
-		if os.path.exists(venv_py):
-			prinfo("venv found, activate it...")
-			activate_venv()
-		elif is_ios():
-			have_perm = check_ios_py_entitlement(sys.executable)
-			if have_perm == None:
-				prinfo("ldid not found, assume your python have proper entitlement")
-				prinfo("if fail later, please install ldid or fix your python manually")
-				prinfo("(require entitlement com.apple.private.security.disk-device-access)")
-			elif not have_perm:
-				prinfo("need entitlement fix, setting up venv for fixing automatically...")
-				setup_venv()
-
-	try:
-		from pyfatfs.PyFatFS import PyFatFS
-	except ModuleNotFoundError:
-		prinfo("PyFatFS not found, setting up venv for installing automatically...")
-		setup_venv()
-		from pyfatfs.PyFatFS import PyFatFS
-
-	# self elevate
-	if os.getuid() != 0:
-		# run with osascript won't have raw disk access by default...
-		# thanks for the perfect security of macos
-		#args = [sys.executable, thisfile, device]
-		#escaped_args = map(lambda x: f"\\\"{x}\\\"", args)
-		#cmd = " ".join(escaped_args)
-		#osascript = " ".join([
-		#	f"do shell script \"{cmd}\"",
-		#	"with administrator privileges",
-		#	"without altering line endings"
-		#])
-		#try:
-		#	os.execlp("osascript", "osascript", "-e", osascript)
-		prinfo("Input the password of your computer if prompted.")
-		prinfo("(It won't show anything while you're typing, just type it blindly)")
-		try:
-			import tempfile
-			os.execlp("sudo", "sudo", sys.executable, thisfile, device, tempfile.gettempdir())
-		except:
-			prbad("Error 17: Root privilege is required.")
-			#tmp_cleanup()
-			exitOnEnter(remount=True)
-
-	from pyfatfs.PyFatFS import PyFatFS
-	from pyfatfs.FATDirectoryEntry import FATDirectoryEntry, make_lfn_entry
-	from pyfatfs.EightDotThree import EightDotThree
-	from pyfatfs._exceptions import PyFATException, NotAnLFNEntryException
-	import struct, errno
-
-	def _search_entry(self, name):
-		name = name.upper()
-		dirs, files, _ = self.get_entries()
-		for entry in dirs+files:
-			try:
-				if entry.get_long_name().upper() == name:
-					return entry
-			except NotAnLFNEntryException:
-				pass
-			if entry.get_short_name() == name:
-				return entry
-
-		raise PyFATException(f'Cannot find entry {name}',
-							 errno=errno.ENOENT)
-	FATDirectoryEntry._search_entry = _search_entry
-
-	def make_8dot3_name(dir_name, parent_dir_entry):
-		dirs, files, _ = parent_dir_entry.get_entries()
-		dir_entries = [e.get_short_name() for e in dirs + files]
-		extsep = "."
-		def map_chars(name: bytes) -> bytes:
-			_name: bytes = b''
-			for b in struct.unpack(f"{len(name)}c", name):
-				if b == b' ':
-					_name += b''
-				elif ord(b) in EightDotThree.INVALID_CHARACTERS:
-					_name += b'_'
-				else:
-					_name += b
-			return _name
-		dir_name = dir_name.upper()
-		# Shorten to 8 chars; strip invalid characters
-		basename = os.path.splitext(dir_name)[0][0:8].strip()
-		if basename.isascii():
-			basename = basename.encode("ascii", errors="replace")
-			basename = map_chars(basename).decode("ascii")
+def fix_hangul(name):
+	cho_base = 0x1100
+	is_cho = lambda c: c >= cho_base and c <= 0x1112
+	jung_base = 0x1161
+	is_jung = lambda c: c >= jung_base and c <= 0x1175
+	jong_base = 0x11A8
+	is_jong = lambda c: c >= jong_base and c <= 0x11C2
+	new_str = ""
+	syllable_code = 0;
+	def append_syllable():
+		nonlocal new_str, syllable_code
+		new_str += chr(syllable_code + 44032)
+		syllable_code = 0
+	for char in name:
+		code = ord(char)
+		if is_cho(code):
+			if syllable_code != 0:
+				append_syllable()
+			syllable_code += (code - cho_base) * 588
+		elif is_jung(code):
+			syllable_code += (code - jung_base) * 28
+		elif is_jong(code):
+			syllable_code += code - jong_base + 1  # this one start with 1
 		else:
-			basename = "HAX8D3FN"
-		# Shorten to 3 chars; strip invalid characters
-		extname = os.path.splitext(dir_name)[1][1:4].strip()
-		if basename.isascii():
-			extname = extname.encode("ascii", errors="replace")
-			extname = map_chars(extname).decode("ascii")
-		elif len(extname) != 0:
-			extname = "HAX"
-		if len(extname) == 0:
-			extsep = ""
-		# Loop until suiting name is found
-		i = 0
-		while len(str(i)) + 1 <= 7:
-			if i > 0:
-				maxlen = 8 - (1 + len(str(i)))
-				basename = f"{basename[0:maxlen]}~{i}"
-			short_name = f"{basename}{extsep}{extname}"
-			if short_name not in dir_entries:
-				return short_name
-			i += 1
-		raise PyFATException("Cannot generate 8dot3 filename, "
-							 "unable to find suiting short file name.",
-							 errno=errno.EEXIST)
-	EightDotThree.make_8dot3_name = staticmethod(make_8dot3_name)
-
-	class FatFS(FSWrapper):
-		def __init__(self, device):
-			self.device = device
-			self.reload()
-		def exists(self, path):
-			return self.fs.exists(path)
-		def isdir(self, path):
-			return self.fs.getinfo(path).is_dir
-		def mkdir(self, path):
-			self.fs.makedir(path)
-		def open(self, path, mode='r'):
-			return self.fs.open(path, mode)
-		def getsize(self, path):
-			return self.fs.getsize(path)
-		def remove(self, path):
-			self.fs.remove(path)
-		def rename(self, src, dst):
-			srcdir, srcname = f"/{src}".rstrip("/").rsplit("/", 1)
-			dstdir, dstname = f"/{dst}".rstrip("/").rsplit("/", 1)
-			if srcdir == dstdir and all(not EightDotThree.is_8dot3_conform(n) for n in [srcname, dstname]):
-				# cursed rename, lfn and same folder only
-				pdentry = self.fs._get_dir_entry(srcdir)
-				dentry = pdentry._search_entry(srcname)
-				lfn_entry = make_lfn_entry(dstname, dentry.name)
-				dentry.set_lfn_entry(lfn_entry)
-				self.fs.fs.update_directory_entry(pdentry)
-				self.fs.fs.flush_fat()
-			elif self.fs.getinfo(src).is_dir:
-				self.fs.movedir(src, dst, create=True)
-			else:
-				self.fs.move(src, dst, create=True)
-		def rmtree(self, path):
-			self.fs.removetree(path)
-		def copytree(self, src, dst):
-			self.fs.copydir(src, dst, create=True)
-		def listdir(self, path):
-			return self.fs.listdir(path)
-		def is_writable(self):
-			try:
-				with self.open("test.txt", "w") as f:
-					f.write("test")
-					f.close()
-				self.remove("test.txt")
-				return True
-			except:
-				return False
-		def ensurespace(self, size):
-			try:
-				first = self.fs.fs.allocate_bytes(size)[0]
-				self.fs.fs.free_cluster_chain(first)
-				return True
-			except PyFATException:
-				return False
-		def close(self):
-			try:
-				self.fs.close()
-			except AttributeError:
-				pass
-		def reload(self):
-			self.close()
-			self.fs = PyFatFS(filename=self.device)
-		def print_root(self):
-			pass
-
-	try:
-		fs = FatFS(device)
-	except PyFATException as e:
-		msg = str(e)
-		if "Cannot open" in msg:
-			prbad("Error 14: Can't open device.")
-			prinfo("Please ensure your SD card is unmounted in disk utility.")
-			if is_ios():
-				prinfo("might also be ios entitlement issue")
-				prinfo("please install ldid or fix your python manually")
-				prinfo("(require entitlement com.apple.private.security.disk-device-access)")
-		elif "Invalid" in msg or "bytes per sector" in msg:
-			prbad("Error 15: Not FAT32 formatted or corrupted filesystem.")
-			prinfo("Please ensure your SD card is properly formatted")
-			prinfo("Consult: https://wiki.hacks.guide/wiki/Formatting_an_SD_card")
-		#tmp_cleanup()
-		exitOnEnter()
-
-	def remove_extra():
-		tmp_cleanup()
-
-	def cleanup(remount=False):
-		global fs, device
-		fs.close()
-		if remount and not is_ios():
-			prinfo("Trying to remount SD card...")
-			run_diskutil_and_wait("mount", device)
-		#tmp_cleanup()
+			if syllable_code != 0:
+				append_syllable()
+			new_str += char
+	return new_str
 
 
-else:
-	# ======== Windows / Linux ========
-	import shutil
+verify_device()
+dig_for_root()
 
-	class OSFS(FSWrapper):
-		def __init__(self, root):
-			self.root = root
-			self.reload()
-		def abs(self, path):
-			return os.path.join(self.root, path)
-		def exists(self, path):
-			return os.path.exists(self.abs(path))
-		def isdir(self, path):
-			return os.path.isdir(self.abs(path))
-		def mkdir(self, path):
-			os.mkdir(self.abs(path))
-		def open(self, path, mode='r'):
-			return open(self.abs(path), mode)
-		def getsize(self, path):
-			return os.path.getsize(self.abs(path))
-		def remove(self, path):
-			os.remove(self.abs(path))
-		def rename(self, src, dst):
-			os.rename(self.abs(src), self.abs(dst))
-		def rmtree(self, path):
-			shutil.rmtree(self.abs(path))
-		def copytree(self, src, dst):
-			shutil.copytree(self.abs(src), self.abs(dst))
-		def listdir(self, path):
-			return os.listdir(path)
-		def is_writable(self):
-			writable = os.access(self.root, os.W_OK)
-			try: # Bodge for windows
-				with open("test.txt", "w") as f:
-					f.write("test")
-					f.close()
-				os.remove("test.txt")
-			except:
-				writable = False
-			return writable
-		def ensurespace(self, size):
-			return shutil.disk_usage(self.root).free >= size
-		def close(self):
-			pass
-		def reload(self):
-			try:
-				os.chdir(self.root)
-			except Exception:
-				prbad("Error 08: Couldn't reapply working directory, is SD card reinserted?")
-				exitOnEnter()
-		def print_root(self):
-			prinfo(f"Current dir: {self.root}")
-
-	verify_device()
-	dig_for_root()
-	fs = OSFS(scriptroot)
+try_chdir()
 
 def clearScreen():
 	if osver == "Windows":
@@ -612,17 +167,17 @@ def getInput(options):
 		return opt
 
 # Section: insureRoot
-if not fs.exists("Nintendo 3DS/"):
+if not os.path.exists(abs("Nintendo 3DS/")):
 	prbad("Error 01: Couldn't find Nintendo 3DS folder! Ensure that you are running this script from the root of the SD card.")
 	prbad("If that doesn't work, eject the SD card, and put it back in your console. Turn it on and off again, then rerun this script.")
-	fs.print_root()
+	prinfo(f"Current dir: {scriptroot}")
 	exitOnEnter()
 
 # Section: sdWritable
 def writeProtectCheck():
 	global fs
 	prinfo("Checking if SD card is writeable...")
-	if not fs.is_writable():
+	if not is_writable():
 		prbad("Error 02: Your SD card is write protected! If using a full size SD card, ensure that the lock switch is facing upwards.")
 		prinfo("Visual aid: https://nintendohomebrew.com/assets/img/nhmemes/sdlock.png")
 		exitOnEnter()
@@ -631,8 +186,9 @@ def writeProtectCheck():
 
 # Section: SD card free space
 # ensure 16MB free space
-if not fs.ensurespace(16 * 1024 * 1024):
-	#prbad(f"Error 06: You need at least 16MB free space on your SD card, you have {(freeSpace / 1000000):.2f} bytes!")
+freeSpace = shutil.disk_usage(scriptroot).free
+if not freeSpace >= 16 * 1024 * 1024:
+	prbad(f"Error 06: You need at least 16MB free space on your SD card, you have {(freeSpace / 1000000):.2f} bytes!")
 	prbad("Error 06: You need at least 16MB free space on your SD card!")
 	prinfo("Please free up some space and try again.")
 	exitOnEnter()
@@ -662,16 +218,16 @@ for i in consoleNames:
 # print("Enter 4 for: New 3DS/2DS, 11.4.0 to 11.7.0")
 
 encodedID1s = {
-	1: "FFFFFFFA119907488546696508A10122054B984768465946C0AA171C4346034CA047B84700900A0871A0050899CE0408730064006D00630000900A0862003900",
-	2: "FFFFFFFA119907488546696508A10122054B984768465946C0AA171C4346034CA047B84700900A0871A005085DCE0408730064006D00630000900A0862003900",
-	3: "FFFFFFFA119907488546696508A10122054B984768465946C0AA171C4346034CA047B84700900A08499E050899CC0408730064006D00630000900A0862003900",
-	4: "FFFFFFFA119907488546696508A10122054B984768465946C0AA171C4346034CA047B84700900A08459E050881CC0408730064006D00630000900A0862003900"
+	1: "01C08FE21CFF2FE111990B488546696507A10122044B984768465946C0AA171C4346024CA047B84771A0050899CE0408730064006D00630000900A0862003900",
+	2: "01C08FE21CFF2FE111990B488546696507A10122044B984768465946C0AA171C4346024CA047B84771A005085DCE0408730064006D00630000900A0862003900",
+	3: "01C08FE21CFF2FE111990B488546696507A10122044B984768465946C0AA171C4346024CA047B847499E050899CC0408730064006D00630000900A0862003900",
+	4: "01C08FE21CFF2FE111990B488546696507A10122044B984768465946C0AA171C4346024CA047B847459E050881CC0408730064006D00630000900A0862003900"
 }
 
 consoleIndex = getInput(range(1, 4))
 if consoleIndex < 0:
 	prgood("Goodbye!")
-	exitOnEnter(remount=True)
+	exitOnEnter()
 
 ID0, ID0Count, ID1, ID1Count = "", 0, "", 0
 
@@ -713,17 +269,17 @@ def createHaxID1():
 	if getInput(range(1, 2)) != 1:
 		print()
 		prinfo("Cancelled.")
-		exitOnEnter(remount=True)
+		exitOnEnter()
 
 	hackedID1Path = ID0 + "/" + hackedID1
 
 	try:
 		prinfo("Creating hacked ID1...")
-		fs.mkdir(hackedID1Path)
+		os.mkdir(abs(hackedID1Path))
 		prinfo("Creating dummy databases...")
-		fs.mkdir(hackedID1Path + "/dbs")
-		fs.open (hackedID1Path + "/dbs/title.db", "w").close()
-		fs.open (hackedID1Path + "/dbs/import.db", "w").close()
+		os.mkdir(abs(hackedID1Path + "/dbs"))
+		open(abs(hackedID1Path + "/dbs/title.db"), "w").close()
+		open(abs(hackedID1Path + "/dbs/import.db"), "w").close()
 	except Exception as exc:
 		if isinstance(exc, OSError) and osver == "Windows" and exc.winerror == 234: # WinError 234 my love
 			prbad("Error 18: Windows locale settings are broken!")
@@ -742,7 +298,7 @@ def createHaxID1():
 
 	if not realID1Path.endswith(realID1BackupTag):
 		prinfo("Backing up original ID1...")
-		fs.rename(realID1Path, realID1Path + realID1BackupTag)
+		os.rename(abs(realID1Path), abs(realID1Path + realID1BackupTag))
 
 	prgood("Created hacked ID1.")
 	exitOnEnter()
@@ -759,30 +315,30 @@ def sanity():
 	checkImportdb = softcheck(hackedID1Path + "/dbs/import.db", 0x31E400)
 	titleDatabasesGood = not (checkTitledb or checkImportdb)
 	if not titleDatabasesGood:
-		if not fs.exists(hackedID1Path + "/dbs"):
-			fs.mkdir(hackedID1Path + "/dbs")
+		if not os.path.exists(abs(hackedID1Path + "/dbs")):
+			os.mkdir(abs(hackedID1Path + "/dbs"))
 		# Stub them both. I'm not sure how the console acts if title.db is fine but not import. Someone had that happen, once
-		fs.open(hackedID1Path + "/dbs/title.db",  "w").close()
-		fs.open(hackedID1Path + "/dbs/import.db", "w").close()
+		open(abs(hackedID1Path + "/dbs/title.db"),  "w").close()
+		open(abs(hackedID1Path + "/dbs/import.db"), "w").close()
 
 	prinfo("Checking for HOME Menu extdata...")
 	for i in homeMenuExtdata:
 		extdataRegionCheck = hackedID1Path + f"/extdata/00000000/{i:08X}"
-		if fs.exists(extdataRegionCheck):
+		if os.path.exists(abs(extdataRegionCheck)):
 			menuExtdataGood = True
 			break
 	
 	prinfo("Checking for Mii Maker extdata...")
 	for i in miiMakerExtdata:
 		extdataRegionCheck = hackedID1Path + f"/extdata/00000000/{i:08X}"
-		if fs.exists(extdataRegionCheck):
+		if os.path.exists(abs(extdataRegionCheck)):
 			miiExtdataGood = True
 			break
 
 	return menuExtdataGood and miiExtdataGood and titleDatabasesGood
 
 def sanityReport():
-	fs.print_root()
+	prinfo(f"Current dir: {scriptroot}")
 
 	if not menuExtdataGood:
 		prbad("HOME menu extdata: Missing!")
@@ -815,18 +371,18 @@ def injection(create=True):
 
 	triggerFilePath = hackedID1Path + "/extdata/" + trigger
 
-	if not fs.exists(triggerFilePath) ^ create:
+	if not os.path.exists(abs(triggerFilePath)) ^ create:
 		prbad(f"Trigger file already {'injected' if create else 'removed'}!")
 		return
 
-	if fs.exists(triggerFilePath):
-		fs.remove(triggerFilePath)
+	if os.path.exists(abs(triggerFilePath)):
+		os.remove(abs(triggerFilePath))
 		haxState = 4
 		prgood("Removed trigger file.")
 		return
 
 	prinfo("Injecting trigger file...")
-	with fs.open(triggerFilePath, 'w') as f:
+	with open(abs(triggerFilePath), 'w') as f:
 		f.write("pls be haxxed mister arm9, thx")
 		f.close()
 
@@ -838,17 +394,17 @@ def remove():
 
 	prinfo("Removing MSET9...")
 
-	if hackedID1Path and fs.exists(hackedID1Path):
-		if not fs.exists(realID1Path + "/dbs") and titleDatabasesGood:
+	if hackedID1Path and os.path.exists(abs(hackedID1Path)):
+		if not os.path.exists(abs(realID1Path + "/dbs")) and titleDatabasesGood:
 			prinfo("Moving databases to user ID1...")
-			fs.rename(hackedID1Path + "/dbs", realID1Path + "/dbs")
+			os.rename(abs(hackedID1Path + "/dbs"), abs(realID1Path + "/dbs"))
 
 		prinfo("Deleting hacked ID1...")
-		fs.rmtree(hackedID1Path)
+		shutil.rmtree(abs(hackedID1Path))
 
-	if fs.exists(realID1Path) and realID1Path.endswith(realID1BackupTag):
+	if os.path.exists(abs(realID1Path) and realID1Path.endswith(realID1BackupTag)):
 		prinfo("Renaming original ID1...")
-		fs.rename(realID1Path, ID0 + "/" + ID1[:32])
+		os.rename(abs(realID1Path), abs(ID0 + "/" + ID1[:32]))
 		ID1 = ID1[:32]
 		realID1Path = ID0 + "/" + ID1
 
@@ -859,11 +415,11 @@ def softcheck(keyfile, expectedSize = None, crc32 = None):
 	global fs
 	filename = keyfile.rsplit("/")[-1]
 
-	if not fs.exists(keyfile):
+	if not os.path.exists(abs(keyfile)):
 		prbad(f"{filename} does not exist on SD card!")
 		return 1
 
-	fileSize = fs.getsize(keyfile)
+	fileSize = os.path.getsize(abs(keyfile))
 	if not fileSize:
 		prbad(f"{filename} is an empty file!")
 		return 1
@@ -872,7 +428,7 @@ def softcheck(keyfile, expectedSize = None, crc32 = None):
 		return 1
 
 	if crc32:
-		with fs.open(keyfile, "rb") as f:
+		with open(abs(keyfile), "rb") as f:
 			checksum = binascii.crc32(f.read())
 			f.close()
 			if crc32 != checksum:
@@ -914,10 +470,10 @@ if fileSanity > 0:
 # prgood("All files look good!")
 
 # Section: sdwalk
-for dirname in fs.listdir("Nintendo 3DS/"):
+for dirname in os.listdir(abs("Nintendo 3DS/")):
 	fullpath = "Nintendo 3DS/" + dirname
 
-	if not fs.isdir(fullpath):
+	if not os.path.isdir(abs(fullpath)):
 		prinfo(f"Found file in Nintendo 3DS folder? '{dirname}'")
 		continue
 
@@ -936,10 +492,12 @@ if ID0Count != 1:
 		prinfo("Consult: https://3ds.hacks.guide/troubleshooting-mset9.html for help!")
 	exitOnEnter()
 
-for dirname in fs.listdir(ID0):
+for dirname in os.listdir(abs(ID0)):
+	if need_hangul_fix():
+		dirname = fix_hangul(dirname)
 	fullpath = ID0 + "/" + dirname
 
-	if not fs.isdir(fullpath):
+	if not os.path.isdir(abs(fullpath)):
 		prinfo(f"Found file in ID0 folder? '{dirname}'")
 		continue
 
@@ -957,13 +515,13 @@ for dirname in fs.listdir(ID0):
 				currentHaxID1index = haxID1index
 				break
 
-		if currentHaxID1index == 0 or (hackedID1Path and fs.exists(hackedID1Path)): # shouldn't happen
+		if currentHaxID1index == 0 or (hackedID1Path and os.path.exists(abs(hackedID1Path))): # shouldn't happen
 			prbad("Unrecognized/duplicate hacked ID1 in ID0 folder, removing!")
-			fs.rmtree(fullpath)
+			shutil.rmtree(abs(fullpath))
 		elif currentHaxID1index != consoleIndex:
 			prbad("Error 03: Don't change console model/version in the middle of MSET9!")
 			print(f"Earlier, you selected: '[{currentHaxID1index}.] {consoleNames[currentHaxID1index]}'")
-			print(f"Now, you selected:     '[{consoleIndex}.] {consoleNames[consoleIndex]}'")
+			print(f"Now, you selected:	 '[{consoleIndex}.] {consoleNames[consoleIndex]}'")
 			print()
 			print("Please re-enter the number for your console model and version.")
 
@@ -979,12 +537,12 @@ for dirname in fs.listdir(ID0):
 				hackedID1 = dirname
 
 			elif choice == consoleIndex:
-				fs.rename(fullpath, ID0 + "/" + hackedID1)
+				os.rename(abs(fullpath), abs(ID0 + "/" + hackedID1))
 
 		hackedID1Path = ID0 + "/" + hackedID1
 		sanityOK = sanity()
 
-		if fs.exists(hackedID1Path + "/extdata/" + trigger):
+		if os.path.exists(abs(hackedID1Path + "/extdata/" + trigger)):
 			triggerFilePath = hackedID1Path + "/extdata/" + trigger
 			haxState = 3 # Injected.
 		elif sanityOK:
@@ -1021,7 +579,7 @@ def mainMenu():
 	while 1:
 		optSelect = getInput(range(0, 5))
 
-		fs.reload() # (?)
+		try_chdir() # (?)
 
 		if optSelect <= 0:
 			break
@@ -1063,10 +621,8 @@ def mainMenu():
 				continue
 
 			remove()
-			remove_extra() # (?)
-			exitOnEnter(remount=True)
+			exitOnEnter()
 
 mainMenu()
-cleanup(remount=True)
 prgood("Goodbye!")
 time.sleep(2)
